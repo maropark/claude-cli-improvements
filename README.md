@@ -36,6 +36,59 @@ Restart Claude Code after saving.
 
 ---
 
+## 2. Multi-session color identity
+
+When running multiple Claude Code sessions simultaneously, each gets a unique color assigned automatically. Colors are coordinated across sessions — no two active sessions share a color.
+
+**Status bar:**
+- Session A: `🟦 ctx:5% in:2k out:1k sess:29% week:35% [blue]`
+- Session B: `🟩 ctx:12% in:8k out:3k sess:44% week:12% [green]`
+
+**Terminal window title** (via OSC 2, works in GNOME Terminal, Kitty, WezTerm, iTerm2, Alacritty):
+- `[blue] claude — ~/Projects/my-api`
+- `[green] claude — ~/Projects/frontend`
+
+The status bar also renders a colored ANSI background block behind the emoji. If your terminal strips ANSI from status bar output, the emoji + `[name]` label still provide clear visual identity.
+
+Up to 8 simultaneous sessions get unique colors (blue, green, purple, teal, orange, crimson, olive, slate). If you run more than 8, colors wrap around.
+
+### Setup
+
+1. Save [`session-color.sh`](session-color.sh) to `~/.claude/session-color.sh` and make it executable:
+
+   ```bash
+   chmod +x ~/.claude/session-color.sh
+   ```
+
+2. Update `~/.claude/settings.json` — replace the `statusLine` key and add hooks:
+
+   ```json
+   {
+     "statusLine": {
+       "type": "command",
+       "command": "bash ~/.claude/session-color.sh statusline"
+     },
+     "hooks": {
+       "Stop": [
+         { "matcher": "", "hooks": [{ "type": "command", "command": "bash ~/.claude/session-color.sh cleanup" }] }
+       ],
+       "UserPromptSubmit": [
+         { "matcher": "", "hooks": [{ "type": "command", "command": "bash ~/.claude/session-color.sh title" }] }
+       ]
+     }
+   }
+   ```
+
+3. Restart Claude Code.
+
+### How it works
+
+Each Claude Code session writes `~/.claude/sessions/<pid>.json` containing its UUID. The script reads this via `$PPID` (the Claude process is the parent of the statusLine subprocess and hooks). On first run, it claims the lowest available color index from a registry at `/tmp/claude-sessions/<uuid>`. Stale registry entries (from crashed sessions) are cleaned up automatically by checking whether the session's PID is still alive. The window title is set via OSC 2 escape sequences written directly to `/dev/tty`.
+
+**Requires:** `jq`
+
+---
+
 ## Contributing
 
 Open a PR with your own snippets — keep entries self-contained and free of personal paths or credentials.
