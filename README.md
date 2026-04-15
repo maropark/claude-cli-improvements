@@ -38,19 +38,27 @@ Restart Claude Code after saving.
 
 ## 2. Multi-session color identity
 
-When running multiple Claude Code sessions simultaneously, each gets a unique color assigned automatically. Colors are coordinated across sessions — no two active sessions share a color.
+When running multiple Claude Code sessions simultaneously, each session automatically gets a unique terminal background color. This makes sessions instantly distinguishable when alt-tabbing between windows.
 
-**Status bar:**
-- Session A: `🟦 ctx:5% in:2k out:1k sess:29% week:35% [blue]`
-- Session B: `🟩 ctx:12% in:8k out:3k sess:44% week:12% [green]`
+- Session A: deep blue background
+- Session B: dark teal background
+- Session C: dark forest green background
+- … up to 8 distinct colors
 
-**Terminal window title** (via OSC 2, works in GNOME Terminal, Kitty, WezTerm, iTerm2, Alacritty):
-- `[blue] claude — ~/Projects/my-api`
-- `[green] claude — ~/Projects/frontend`
+Colors are coordinated across sessions — no two active sessions share a color. On exit, each session's terminal background resets to your default. The window title also gets labeled for extra context:
 
-The status bar also renders a colored ANSI background block behind the emoji. If your terminal strips ANSI from status bar output, the emoji + `[name]` label still provide clear visual identity.
+```
+[blue] claude — ~/Projects/my-api
+[teal] claude — ~/Projects/frontend
+```
 
-Up to 8 simultaneous sessions get unique colors (blue, green, purple, teal, orange, crimson, olive, slate). If you run more than 8, colors wrap around.
+The background shifts on your first message in each session (no start hook exists in Claude Code), then stays stable.
+
+### How it works
+
+Each Claude Code session writes `~/.claude/sessions/<pid>.json` with a UUID. The script reads this via `$PPID` (Claude is the parent process of all hooks). On first `UserPromptSubmit`, it claims the lowest available color index from a file registry at `/tmp/claude-sessions/`. Stale entries from crashed sessions are detected via `kill -0` and cleaned up automatically. Background color is applied via `OSC 11` (`\e]11;#hexcolor\a`) and window title via `OSC 2`, both written directly to `/dev/tty` so they reach the terminal rather than being captured by Claude Code.
+
+Supported terminals: GNOME Terminal, Kitty, WezTerm, iTerm2, Alacritty, xterm. The color defaults back to your theme on session end.
 
 ### Setup
 
@@ -60,30 +68,22 @@ Up to 8 simultaneous sessions get unique colors (blue, green, purple, teal, oran
    chmod +x ~/.claude/session-color.sh
    ```
 
-2. Update `~/.claude/settings.json` — replace the `statusLine` key and add hooks:
+2. Add hooks to `~/.claude/settings.json`:
 
    ```json
    {
-     "statusLine": {
-       "type": "command",
-       "command": "bash ~/.claude/session-color.sh statusline"
-     },
      "hooks": {
+       "UserPromptSubmit": [
+         { "matcher": "", "hooks": [{ "type": "command", "command": "bash ~/.claude/session-color.sh set" }] }
+       ],
        "Stop": [
          { "matcher": "", "hooks": [{ "type": "command", "command": "bash ~/.claude/session-color.sh cleanup" }] }
-       ],
-       "UserPromptSubmit": [
-         { "matcher": "", "hooks": [{ "type": "command", "command": "bash ~/.claude/session-color.sh title" }] }
        ]
      }
    }
    ```
 
 3. Restart Claude Code.
-
-### How it works
-
-Each Claude Code session writes `~/.claude/sessions/<pid>.json` containing its UUID. The script reads this via `$PPID` (the Claude process is the parent of the statusLine subprocess and hooks). On first run, it claims the lowest available color index from a registry at `/tmp/claude-sessions/<uuid>`. Stale registry entries (from crashed sessions) are cleaned up automatically by checking whether the session's PID is still alive. The window title is set via OSC 2 escape sequences written directly to `/dev/tty`.
 
 **Requires:** `jq`
 
