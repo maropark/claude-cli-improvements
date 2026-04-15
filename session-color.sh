@@ -69,10 +69,18 @@ _assign_color() {
         [ -f "$f" ] && taken="$taken $(cat "$f")"
     done
 
-    local chosen=0
-    for i in 0 1 2 3 4 5 6 7; do
-        if ! echo "$taken" | grep -qw "$i"; then
-            chosen=$i
+    # Derive a preferred index from the session UUID so different sessions
+    # spread across the palette rather than always starting at 0.
+    local preferred
+    preferred=$(printf '%d' "0x$(echo "$sid" | md5sum | cut -c1-2)" 2>/dev/null || echo 0)
+    preferred=$((preferred % 8))
+
+    # Walk from preferred index, wrapping around, until a free slot is found
+    local chosen=$preferred
+    for offset in 0 1 2 3 4 5 6 7; do
+        local candidate=$(( (preferred + offset) % 8 ))
+        if ! echo "$taken" | grep -qw "$candidate"; then
+            chosen=$candidate
             break
         fi
     done
