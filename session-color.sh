@@ -1,29 +1,40 @@
 #!/usr/bin/env bash
 # session-color.sh — per-session terminal background color for Claude Code
 #
-# Each session claims a unique background color from a shared registry so
-# concurrent sessions are visually distinct when alt-tabbing between windows.
-# Colors are assigned on first UserPromptSubmit and released on Stop.
+# Each session gets a unique background color, persisted across resumes.
+# The background is applied on every UserPromptSubmit so it stays visible
+# throughout the conversation. No Stop hook is needed — dead sessions are
+# detected via kill -0 before new color assignments.
 #
-# Modes:
-#   set     (UserPromptSubmit hook) — assign color, apply OSC 11, set window title
-#   cleanup (Stop hook)             — release color, reset terminal background
+# Mode:
+#   set  (UserPromptSubmit hook) — assign/recall color, apply OSC 11
 
-REGISTRY_DIR="/tmp/claude-sessions"
+COLORS_DIR="$HOME/.claude/session-colors"   # persistent: UUID → color index
+ACTIVE_DIR="/tmp/claude-active-sessions"    # ephemeral: currently-running sessions
+LOCK_DIR="/tmp/claude-color-lock"           # atomic mkdir lock
 SESSION_DIR="$HOME/.claude/sessions"
 
-# 8 distinct dark backgrounds — all clearly different from each other and
-# from the default Claude Code purple/magenta theme
+# 8 distinct dark backgrounds, all clearly different from the default
+# Claude Code purple/magenta theme
 BG_COLORS=("#00001e" "#002020" "#001400" "#1e0000" "#141000" "#001428" "#1e1400" "#0e000e")
 NAMES=(     blue      teal      forest    maroon    amber     navy      copper    plum)
 
-_get_session_id() {
-    jq -r '.sessionId // empty' "$SESSION_DIR/$PPID.json" 2>/dev/null || true
+_acquire_lock() {
+    local tries=0
+    while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+        sleep 0.05
+        tries=$((tries + 1))
+        [ $tries -gt 100 ] && return 1  # 5s timeout
+    done
 }
 
-_cleanup_stale() {
-    [ -d "$REGISTRY_DIR" ] || return 0
-    for f in "$REGISTRY_DIR"/*; do
+_release_lock() {
+    rmdir "$LOCK_DIR" 2>/dev/null
+}
+
+_cleanup_stale_active() {
+    [ -d "$ACTIVE_DIR" ] || return 0
+    for f in "$ACTIVE_DIR"/*; do
         [ -f "$f" ] || continue
         fsid=$(basename "$f")
         fpid=$(grep -rl "\"$fsid\"" "$SESSION_DIR/" 2>/dev/null \
@@ -36,16 +47,25 @@ _cleanup_stale() {
 
 _assign_color() {
     local sid="$1"
-    local reg="$REGISTRY_DIR/$sid"
+    local persistent="$COLORS_DIR/$sid"
+    local active="$ACTIVE_DIR/$sid"
 
-    # Already assigned — idempotent
-    [ -f "$reg" ] && { cat "$reg"; return; }
+    mkdir -p "$COLORS_DIR" "$ACTIVE_DIR"
 
-    mkdir -p "$REGISTRY_DIR"
-    _cleanup_stale
+    # Persistent assignment exists — reuse same color (handles resume)
+    if [ -f "$persistent" ]; then
+        cp "$persistent" "$active"
+        cat "$persistent"
+        return
+    fi
+
+    # New session — lock to prevent race between concurrent first messages
+    _acquire_lock || { echo 0; return; }
+
+    _cleanup_stale_active
 
     local taken=""
-    for f in "$REGISTRY_DIR"/*; do
+    for f in "$ACTIVE_DIR"/*; do
         [ -f "$f" ] && taken="$taken $(cat "$f")"
     done
 
@@ -57,7 +77,11 @@ _assign_color() {
         fi
     done
 
-    printf '%d' "$chosen" > "$reg"
+    printf '%d' "$chosen" > "$persistent"
+    cp "$persistent" "$active"
+
+    _release_lock
+
     echo "$chosen"
 }
 
@@ -65,26 +89,17 @@ case "${1:-}" in
 
   set)
     [ -w /dev/tty ] || exit 0
-    sid=$(_get_session_id)
+
+    sid=$(cat | jq -r '.session_id // empty' 2>/dev/null)
     [ -z "$sid" ] && exit 0
+
     idx=$(_assign_color "$sid")
     color="${BG_COLORS[$idx]}"
     name="${NAMES[$idx]}"
-    # Apply terminal background color
+
     printf '\e]11;%s\a' "$color" > /dev/tty
-    # Set window title for extra context
     cwd=$(pwd | sed "s|$HOME|~|")
     printf '\e]2;[%s] claude — %s\a' "$name" "$cwd" > /dev/tty
-    ;;
-
-  cleanup)
-    sid=$(_get_session_id)
-    [ -n "$sid" ] && rm -f "$REGISTRY_DIR/$sid"
-    # Reset terminal background and window title to defaults
-    if [ -w /dev/tty ]; then
-        printf '\e]111\a' > /dev/tty
-        printf '\e]2;\a'  > /dev/tty
-    fi
     ;;
 
 esac

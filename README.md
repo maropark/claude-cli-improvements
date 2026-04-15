@@ -40,25 +40,29 @@ Restart Claude Code after saving.
 
 When running multiple Claude Code sessions simultaneously, each session automatically gets a unique terminal background color. This makes sessions instantly distinguishable when alt-tabbing between windows.
 
-- Session A: deep blue background
-- Session B: dark teal background
-- Session C: dark forest green background
+- Session A: deep blue background (`#00001e`)
+- Session B: dark teal background (`#002020`)
+- Session C: dark forest green (`#001400`)
 - … up to 8 distinct colors
 
-Colors are coordinated across sessions — no two active sessions share a color. On exit, each session's terminal background resets to your default. The window title also gets labeled for extra context:
+Colors are coordinated across active sessions so no two share a color. The assignment is **persistent** — if you `/resume` a session, it picks up the same color it had before. The window title is also labeled:
 
 ```
 [blue] claude — ~/Projects/my-api
 [teal] claude — ~/Projects/frontend
 ```
 
-The background shifts on your first message in each session (no start hook exists in Claude Code), then stays stable.
+The background applies on your first message (Claude Code has no session-start hook), then stays visible for the entire session — including while Claude is responding.
+
+### GNOME Terminal prerequisite
+
+OSC 11 color sequences are silently ignored if the profile forces system theme colors. In GNOME Terminal, go to **Preferences → your profile → Colors** and uncheck **"Use colors from system theme"** before using this.
 
 ### How it works
 
-Each Claude Code session writes `~/.claude/sessions/<pid>.json` with a UUID. The script reads this via `$PPID` (Claude is the parent process of all hooks). On first `UserPromptSubmit`, it claims the lowest available color index from a file registry at `/tmp/claude-sessions/`. Stale entries from crashed sessions are detected via `kill -0` and cleaned up automatically. Background color is applied via `OSC 11` (`\e]11;#hexcolor\a`) and window title via `OSC 2`, both written directly to `/dev/tty` so they reach the terminal rather than being captured by Claude Code.
+The `UserPromptSubmit` hook receives a JSON payload containing `session_id`. The script uses this UUID to look up or create a persistent color assignment in `~/.claude/session-colors/`. An ephemeral active-session registry at `/tmp/claude-active-sessions/` tracks which colors are in use; dead sessions are detected via `kill -0` and cleaned up before new assignments. Background color is applied via OSC 11 (`\e]11;#hexcolor\a`) written directly to `/dev/tty`. No `Stop` hook is needed — re-applying OSC 11 on every `UserPromptSubmit` keeps the color stable, and the background simply remains set when the session ends.
 
-Supported terminals: GNOME Terminal, Kitty, WezTerm, iTerm2, Alacritty, xterm. The color defaults back to your theme on session end.
+Supported terminals: GNOME Terminal (with custom colors enabled), Kitty, WezTerm, iTerm2, Alacritty, xterm.
 
 ### Setup
 
@@ -68,16 +72,13 @@ Supported terminals: GNOME Terminal, Kitty, WezTerm, iTerm2, Alacritty, xterm. T
    chmod +x ~/.claude/session-color.sh
    ```
 
-2. Add hooks to `~/.claude/settings.json`:
+2. Add a `UserPromptSubmit` hook to `~/.claude/settings.json`:
 
    ```json
    {
      "hooks": {
        "UserPromptSubmit": [
          { "matcher": "", "hooks": [{ "type": "command", "command": "bash ~/.claude/session-color.sh set" }] }
-       ],
-       "Stop": [
-         { "matcher": "", "hooks": [{ "type": "command", "command": "bash ~/.claude/session-color.sh cleanup" }] }
        ]
      }
    }
